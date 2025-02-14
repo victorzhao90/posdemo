@@ -1,560 +1,115 @@
-技术栈
-Spring Boot（后端 API，WebSocket 服务器）
-Angular（营业员网页）
-POS 模拟器（一个简单的 Web 页面，通过 WebSocket 连接）
-🔹 后端（Spring Boot）
-1️⃣ 创建 Spring Boot 项目
-
-bash
-Copy
-Edit
-mvn spring-boot:run
-2️⃣ WebSocket 配置
-
-java
-Copy
-Edit
-import org.springframework.context.annotation.Configuration;
-import org.springframework.messaging.simp.config.MessageBrokerRegistry;
-import org.springframework.web.socket.config.annotation.EnableWebSocketMessageBroker;
-import org.springframework.web.socket.config.annotation.StompEndpointRegistry;
-import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerConfigurer;
-
-@Configuration
-@EnableWebSocketMessageBroker
-public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
-
-    @Override
-    public void registerStompEndpoints(StompEndpointRegistry registry) {
-        registry.addEndpoint("/ws").setAllowedOrigins("*").withSockJS();
-    }
-
-    @Override
-    public void configureMessageBroker(MessageBrokerRegistry registry) {
-        registry.enableSimpleBroker("/topic");
-        registry.setApplicationDestinationPrefixes("/app");
-    }
-}
-3️⃣ WebSocket 控制器
-
-java
-Copy
-Edit
-import org.springframework.messaging.handler.annotation.MessageMapping;
-import org.springframework.messaging.handler.annotation.SendTo;
-import org.springframework.stereotype.Controller;
-
-@Controller
-public class PosController {
-
-    @MessageMapping("/pos/question")
-    @SendTo("/topic/question")
-    public String sendQuestion(String message) {
-        return message;
-    }
-
-    @MessageMapping("/pos/answer")
-    @SendTo("/topic/answer")
-    public String receiveAnswer(String answer) {
-        return answer;
-    }
-}
-🔹 前端（Angular 营业员网页）
-1️⃣ 安装 @stomp/ng2-stompjs
-
-bash
-Copy
-Edit
-npm install @stomp/ng2-stompjs --save
-2️⃣ WebSocket 服务
-
+ 1️⃣ web-socket.service.ts
 typescript
 Copy
 Edit
 import { Injectable } from '@angular/core';
-import { Client, Message } from '@stomp/stompjs';
+import { Client } from '@stomp/stompjs';
 import * as SockJS from 'sockjs-client';
+import { BehaviorSubject } from 'rxjs';
 
 @Injectable({
-  providedIn: 'root',
+  providedIn: 'root'
 })
 export class WebSocketService {
-  private client!: Client;
+  private stompClient: Client | null = null;
+  private messageSubject = new BehaviorSubject<string | null>(null);
+  message$ = this.messageSubject.asObservable();
 
-  constructor() {
-    this.client = new Client({
-      webSocketFactory: () => new SockJS('http://localhost:8080/ws'),
-      reconnectDelay: 5000,
+  constructor() {}
+
+  /** 🔹 连接 WebSocket */
+  connect() {
+    const socket = new SockJS('http://localhost:8080/ws'); // 连接后端 WebSocket
+    this.stompClient = new Client({
+      webSocketFactory: () => socket,
+      reconnectDelay: 5000 // 5秒自动重连
     });
-    this.client.activate();
+
+    this.stompClient.onConnect = () => {
+      console.log('✅ WebSocket 已连接');
+      this.stompClient?.subscribe('/topic/questions', message => {
+        this.messageSubject.next(message.body);
+      });
+    };
+
+    this.stompClient.activate();
   }
 
-  sendQuestion(question: string) {
-    this.client.publish({ destination: '/app/pos/question', body: question });
+  /** 🔹 断开 WebSocket */
+  disconnect() {
+    if (this.stompClient) {
+      this.stompClient.deactivate();
+      this.stompClient = null;
+    }
   }
 
-  receiveAnswer(callback: (message: Message) => void) {
-    this.client.subscribe('/topic/answer', callback);
+  /** 🔹 发送用户的 Yes/No 选择 */
+  sendResponse(answer: boolean) {
+    if (this.stompClient && this.stompClient.connected) {
+      this.stompClient.publish({
+        destination: '/app/response',
+        body: JSON.stringify({ answer })
+      });
+    }
   }
 }
-3️⃣ 营业员页面
-
-html
-Copy
-Edit
-<button (click)="sendQuestion()">发送问题到 POS</button>
-<p>POS 机反馈: {{ answer }}</p>
+✅ 2️⃣ app.component.ts
 typescript
 Copy
 Edit
-import { Component } from '@angular/core';
+import { Component, OnInit, OnDestroy } from '@angular/core';
 import { WebSocketService } from './web-socket.service';
+import { Subscription } from 'rxjs';
 
 @Component({
   selector: 'app-root',
   templateUrl: './app.component.html',
+  styleUrls: ['./app.component.css']
 })
-export class AppComponent {
-  answer = '';
+export class AppComponent implements OnInit, OnDestroy {
+  question: string | null = null;
+  private subscription!: Subscription;
 
-  constructor(private wsService: WebSocketService) {}
-
-  sendQuestion() {
-    this.wsService.sendQuestion('请确认您的身份信息正确？');
-  }
+  constructor(private webSocketService: WebSocketService) {}
 
   ngOnInit() {
-    this.wsService.receiveAnswer((message) => {
-      this.answer = message.body;
+    this.subscription = this.webSocketService.message$.subscribe(msg => {
+      this.question = msg;
     });
   }
+
+  ngOnDestroy() {
+    this.subscription.unsubscribe();
+  }
+
+  connect() {
+    this.webSocketService.connect();
+  }
+
+  disconnect() {
+    this.webSocketService.disconnect();
+  }
+
+  sendResponse(answer: boolean) {
+    this.webSocketService.sendResponse(answer);
+  }
 }
-🔹 POS 机（网页模拟器）
+✅ 3️⃣ app.component.html
 html
 Copy
 Edit
-<script>
-  let socket = new SockJS('http://localhost:8080/ws');
-  let stompClient = Stomp.over(socket);
+<div class="container">
+  <h1>POS 机模拟器</h1>
 
-  stompClient.connect({}, function () {
-    stompClient.subscribe('/topic/question', function (message) {
-      let question = message.body;
-      let answer = confirm(question) ? 'Yes' : 'No';
-      stompClient.send('/app/pos/answer', {}, answer);
-    });
-  });
-</script>
-✅ 运行流程
-1️⃣ 启动 Spring Boot 服务器
-2️⃣ 打开 Angular 营业员页面，点击 "发送问题到 POS"
-3️⃣ POS 机收到问题，用户点击 Yes/No
-4️⃣ WebSocket 传输答案回营业员页面，实时显示
+  <div *ngIf="question">
+    <h2>{{ question }}</h2>
+  </div>
 
-这样你就有了一个完整的 POS 机模拟器，包含 Spring Boot 和 Angular 实现的 WebSocket 交互！🚀
+  <button (click)="sendResponse(true)">Yes</button>
+  <button (click)="sendResponse(false)">No</button>
 
+  <hr>
 
-2/2
-
-You said:
-POS 机（网页模拟器） 这个怎么实现
-ChatGPT said:
-POS 机模拟器可以用一个简单的 HTML+JavaScript 网页来实现，通过 WebSocket 连接后端，接收问题并发送用户的回答。下面是完整的 POS 机模拟器代码，你可以在浏览器中运行它：
-
-📌 POS 机（网页模拟器）
-创建一个 HTML 文件，例如 pos.html，并使用 SockJS + Stomp.js 进行 WebSocket 通信：
-
-html
-Copy
-Edit
-<!DOCTYPE html>
-<html lang="zh">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>POS 机模拟器</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/sockjs-client/1.5.1/sockjs.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            text-align: center;
-            margin: 20px;
-        }
-        #question {
-            font-size: 20px;
-            margin: 20px;
-        }
-        button {
-            padding: 10px 20px;
-            font-size: 18px;
-            margin: 10px;
-        }
-    </style>
-</head>
-<body>
-    <h2>POS 机模拟器</h2>
-    <p id="status">连接中...</p>
-    <p id="question">等待问题...</p>
-    <button id="yesBtn" onclick="sendAnswer('Yes')" disabled>✅ 是</button>
-    <button id="noBtn" onclick="sendAnswer('No')" disabled>❌ 否</button>
-
-    <script>
-        let socket = new SockJS('http://localhost:8080/ws');  // 连接 Spring Boot WebSocket 服务器
-        let stompClient = Stomp.over(socket);
-
-        stompClient.connect({}, function () {
-            document.getElementById('status').innerText = "✅ 已连接";
-            
-            // 监听后端推送的问题
-            stompClient.subscribe('/topic/question', function (message) {
-                let question = message.body;
-                document.getElementById('question').innerText = question;
-                document.getElementById('yesBtn').disabled = false;
-                document.getElementById('noBtn').disabled = false;
-            });
-        });
-
-        function sendAnswer(answer) {
-            stompClient.send('/app/pos/answer', {}, answer);
-            document.getElementById('question').innerText = "已提交答案：" + answer;
-            document.getElementById('yesBtn').disabled = true;
-            document.getElementById('noBtn').disabled = true;
-        }
-    </script>
-</body>
-</html>
-🔹 运行步骤
-1️⃣ 启动 Spring Boot 后端（确保 WebSocketConfig 监听 /ws）
-2️⃣ 打开 pos.html（用 Chrome 或 Edge 浏览器本地打开）
-3️⃣ POS 机模拟器会连接 WebSocket，等待问题推送
-4️⃣ 营业员网页发送问题后，POS 机会显示问题
-5️⃣ 用户点击 “✅ 是” 或 “❌ 否”，答案会通过 WebSocket 发送回后端
-6️⃣ 后端处理答案，并可以通知营业员端
-
-🎯 功能亮点
-✅ 基于 WebSocket 实时通信，POS 机和营业员网页同步
-✅ 按钮交互，防止用户多次提交
-✅ 适用于真实 POS 机，未来可以对接硬件设备
-
-这样，你的 POS 机就可以和 Spring Boot 后端以及 Angular 前端 实时交互 了！🚀
-有需要优化或扩展的功能，可以告诉我！
-
-
-
-
-
-
-You said:
-provide a file structure
-ChatGPT said:
-📌 Full Project File Structure
-This project consists of Spring Boot backend, Angular frontend, and a POS machine simulator (HTML) for testing WebSocket communication.
-
-📁 Project Root Structure
-bash
-Copy
-Edit
-pos-credit-registration/
-│── backend/                    # Spring Boot backend
-│   ├── src/main/java/com/example/pos/
-│   │   ├── PosApplication.java          # Main Spring Boot application
-│   │   ├── config/WebSocketConfig.java  # WebSocket configuration
-│   │   ├── controller/PosController.java  # WebSocket controller
-│   ├── src/main/resources/
-│   │   ├── application.properties        # Backend configuration
-│   ├── pom.xml                           # Maven dependencies
-│
-│── frontend/                   # Angular Frontend
-│   ├── src/app/
-│   │   ├── app.component.ts     # Main component
-│   │   ├── web-socket.service.ts # WebSocket service
-│   │   ├── app.module.ts        # Module config
-│   ├── package.json             # Angular dependencies
-│
-│── pos-simulator/               # POS Machine Simulator
-│   ├── pos.html                 # POS Web UI (WebSocket client)
-│
-│── README.md                    # Documentation
-📁 Backend (Spring Boot)
-bash
-Copy
-Edit
-backend/
-├── src/main/java/com/example/pos/
-│   ├── PosApplication.java         # Main entry point
-│   ├── config/WebSocketConfig.java # WebSocket configuration
-│   ├── controller/PosController.java # WebSocket API for POS
-│
-├── src/main/resources/
-│   ├── application.properties  # Spring Boot configuration
-│
-├── pom.xml  # Dependencies
-🔹 Backend Code
-1️⃣ WebSocketConfig.java (WebSocket Setup)
-java
-Copy
-Edit
-@Configuration
-@EnableWebSocketMessageBroker
-public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
-    @Override
-    public void registerStompEndpoints(StompEndpointRegistry registry) {
-        registry.addEndpoint("/ws").setAllowedOrigins("*").withSockJS();
-    }
-
-    @Override
-    public void configureMessageBroker(MessageBrokerRegistry registry) {
-        registry.enableSimpleBroker("/topic");
-        registry.setApplicationDestinationPrefixes("/app");
-    }
-}
-2️⃣ PosController.java (WebSocket API)
-java
-Copy
-Edit
-@Controller
-public class PosController {
-    @MessageMapping("/pos/question")
-    @SendTo("/topic/question")
-    public String sendQuestion(String message) {
-        return message;
-    }
-
-    @MessageMapping("/pos/answer")
-    @SendTo("/topic/answer")
-    public String receiveAnswer(String answer) {
-        return answer;
-    }
-}
-📁 Frontend (Angular)
-bash
-Copy
-Edit
-frontend/
-├── src/app/
-│   ├── app.component.ts         # Main component
-│   ├── web-socket.service.ts    # WebSocket service
-│   ├── app.module.ts            # Angular module
-│
-├── package.json   # Dependencies
-🔹 Angular Code
-1️⃣ web-socket.service.ts (WebSocket Service)
-typescript
-Copy
-Edit
-import { Injectable } from '@angular/core';
-import { Client, Message } from '@stomp/stompjs';
-import * as SockJS from 'sockjs-client';
-
-@Injectable({
-  providedIn: 'root',
-})
-export class WebSocketService {
-  private client!: Client;
-
-  constructor() {
-    this.client = new Client({
-      webSocketFactory: () => new SockJS('http://localhost:8080/ws'),
-      reconnectDelay: 5000,
-    });
-    this.client.activate();
-  }
-
-  sendQuestion(question: string) {
-    this.client.publish({ destination: '/app/pos/question', body: question });
-  }
-
-  receiveAnswer(callback: (message: Message) => void) {
-    this.client.subscribe('/topic/answer', callback);
-  }
-}
-2️⃣ app.component.ts (Main Component)
-typescript
-Copy
-Edit
-import { Component } from '@angular/core';
-import { WebSocketService } from './web-socket.service';
-
-@Component({
-  selector: 'app-root',
-  templateUrl: './app.component.html',
-})
-export class AppComponent {
-  answer = '';
-
-  constructor(private wsService: WebSocketService) {}
-
-  sendQuestion() {
-    this.wsService.sendQuestion('请确认您的身份信息正确？');
-  }
-
-  ngOnInit() {
-    this.wsService.receiveAnswer((message) => {
-      this.answer = message.body;
-    });
-  }
-}
-📁 POS Machine Simulator
-graphql
-Copy
-Edit
-pos-simulator/
-├── pos.html  # POS Machine Web UI
-🔹 pos.html (POS UI)
-html
-Copy
-Edit
-<!DOCTYPE html>
-<html lang="zh">
-<head>
-    <meta charset="UTF-8">
-    <title>POS 机模拟器</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/sockjs-client/1.5.1/sockjs.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
-    <style>
-        body { text-align: center; font-family: Arial, sans-serif; margin: 20px; }
-        #question { font-size: 20px; margin: 20px; }
-        button { padding: 10px 20px; font-size: 18px; margin: 10px; }
-    </style>
-</head>
-<body>
-    <h2>POS 机模拟器</h2>
-    <p id="status">连接中...</p>
-    <p id="question">等待问题...</p>
-    <button id="yesBtn" onclick="sendAnswer('Yes')" disabled>✅ 是</button>
-    <button id="noBtn" onclick="sendAnswer('No')" disabled>❌ 否</button>
-
-    <script>
-        let socket = new SockJS('http://localhost:8080/ws');  
-        let stompClient = Stomp.over(socket);
-
-        stompClient.connect({}, function () {
-            document.getElementById('status').innerText = "✅ 已连接";
-            
-            stompClient.subscribe('/topic/question', function (message) {
-                let question = message.body;
-                document.getElementById('question').innerText = question;
-                document.getElementById('yesBtn').disabled = false;
-                document.getElementById('noBtn').disabled = false;
-            });
-        });
-
-        function sendAnswer(answer) {
-            stompClient.send('/app/pos/answer', {}, answer);
-            document.getElementById('question').innerText = "已提交答案：" + answer;
-            document.getElementById('yesBtn').disabled = true;
-            document.getElementById('noBtn').disabled = true;
-        }
-    </script>
-</body>
-</html>
-✅ Running the Project
-1️⃣ Start Spring Boot Backend
-
-bash
-Copy
-Edit
-cd backend
-mvn spring-boot:run
-2️⃣ Start Angular Frontend
-
-bash
-Copy
-Edit
-cd frontend
-ng serve --open
-3️⃣ Open pos.html in a browser
-
-POS machine will wait for questions from the Angular UI
-Once a question is sent, it will appear in POS
-User selects "Yes" or "No", and it will be sent back to the backend
-📌 Summary
-✅ Real-time WebSocket communication between Angular, POS, and Spring Boot
-✅ Angular acts as the clerk's interface, sending questions and receiving answers
-✅ POS machine simulation via HTML page using WebSocket
-
-This project structure makes it easy to scale and integrate with real POS devices in the future! 🚀 Let me know if you need any modifications!
-
-
-
-
-
-
-You said:
-org.springframework doesn't exist
-ChatGPT said:
-你遇到 org.springframework doesn't exist 这个问题，通常是因为：
-
-Maven 依赖未正确下载
-Spring Boot 依赖未添加
-IDE（如 IntelliJ）未正确导入 Maven 依赖
-✅ 解决方法
-1️⃣ 检查 pom.xml 是否正确
-请确保你的 backend/pom.xml 文件包含 Spring Boot Web 和 WebSocket 依赖：
-
-xml
-Copy
-Edit
-<dependencies>
-    <!-- Spring Boot Web -->
-    <dependency>
-        <groupId>org.springframework.boot</groupId>
-        <artifactId>spring-boot-starter-web</artifactId>
-    </dependency>
-
-    <!-- Spring Boot WebSocket -->
-    <dependency>
-        <groupId>org.springframework.boot</groupId>
-        <artifactId>spring-boot-starter-websocket</artifactId>
-    </dependency>
-
-    <!-- STOMP 依赖 -->
-    <dependency>
-        <groupId>org.springframework.boot</groupId>
-        <artifactId>spring-boot-starter-messaging</artifactId>
-    </dependency>
-
-    <!-- Spring Boot Starter -->
-    <dependency>
-        <groupId>org.springframework.boot</groupId>
-        <artifactId>spring-boot-starter</artifactId>
-    </dependency>
-
-    <!-- Spring Boot Test（可选） -->
-    <dependency>
-        <groupId>org.springframework.boot</groupId>
-        <artifactId>spring-boot-starter-test</artifactId>
-        <scope>test</scope>
-    </dependency>
-</dependencies>
-2️⃣ 重新导入 Maven 依赖
-🔹 终端执行
-bash
-Copy
-Edit
-cd backend
-mvn clean install
-然后再运行：
-
-bash
-Copy
-Edit
-mvn spring-boot:run
-🔹 在 IntelliJ IDEA
-右键 pom.xml > Maven > Reload Project
-如果仍然报错，进入 File > Invalidate Caches / Restart > Invalidate and Restart
-重新启动项目
-3️⃣ 检查 import 语句
-请检查你的 Java 文件 PosApplication.java 是否有正确的 import 语句：
-
-java
-Copy
-Edit
-import org.springframework.boot.SpringApplication;
-import org.springframework.boot.autoconfigure.SpringBootApplication;
-📌 总结
-确保 pom.xml 里添加了 spring-boot-starter-web 和 spring-boot-starter-websocket 依赖
-运行 mvn clean install 重新下载依赖
-在 IntelliJ 里 Reload Maven Project
-重新启动 Spring Boot
+  <button (click)="connect()">连接服务器</button>
+  <button (click)="disconnect()">断开连接</button>
+</div>
