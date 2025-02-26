@@ -1,227 +1,112 @@
- 1. 目录结构
-bash
+2️⃣ Implement pos.component.ts (Logic)
+Modify the generated pos.component.ts to handle WebSocket communication and PIN input:
+
+typescript
 Copy
 Edit
-backend-springboot/
-│── src/main/java/com/example/pos
-│   ├── controller
-│   │   ├── QuestionController.java      # 处理问题的 API
-│   │   ├── AnswerController.java        # 处理 POS 机回答
-│   ├── model
-│   │   ├── Question.java                # 问题模型
-│   ├── service
-│   │   ├── QuestionService.java         # 提供问题的逻辑
-│   ├── Application.java                 # 启动类
-│── src/main/resources
-│   ├── questions.json                   # 预设问题（模拟数据库）
-│── pom.xml
-🔹 2. 创建 questions.json
-模拟数据库，存储问题：
+import { Component, OnInit } from '@angular/core';
+import { Client } from '@stomp/stompjs';
+import * as SockJS from 'sockjs-client';
 
-json
-Copy
-Edit
-[
-  { "id": 1, "content": "请确认您的姓名是否正确？", "field": "name" },
-  { "id": 2, "content": "请确认您的地址是否正确？", "field": "address" },
-  { "id": 3, "content": "请确认您的国籍是否正确？", "field": "nationality" }
-]
-🔹 3. 创建 Question 模型
-Question.java
+@Component({
+  selector: 'app-pos',
+  templateUrl: './pos.component.html',
+  styleUrls: ['./pos.component.css']
+})
+export class PosComponent implements OnInit {
+  private stompClient!: Client;
+  status: string = '连接中...';
+  enteredPin: string = '';
 
-java
-Copy
-Edit
-package com.example.pos.model;
+  ngOnInit(): void {
+    this.connectWebSocket();
+  }
 
-public class Question {
-    private int id;
-    private String content;
-    private String field; // 关联字段，例如 "name", "address"
+  connectWebSocket(): void {
+    const socket = new SockJS('http://localhost:8080/ws');
+    this.stompClient = new Client({
+      webSocketFactory: () => socket,
+      debug: (str) => console.log(str),
+      reconnectDelay: 5000
+    });
 
-    // 构造方法
-    public Question() {}
-    
-    public Question(int id, String content, String field) {
-        this.id = id;
-        this.content = content;
-        this.field = field;
+    this.stompClient.onConnect = () => {
+      this.status = '✅ 已连接';
+      console.log('Connected to WebSocket');
+    };
+
+    this.stompClient.activate();
+  }
+
+  enterDigit(digit: string): void {
+    if (this.enteredPin.length < 4) {
+      this.enteredPin += digit;
     }
+  }
 
-    // Getter 和 Setter
-    public int getId() { return id; }
-    public void setId(int id) { this.id = id; }
+  clearPin(): void {
+    this.enteredPin = '';
+  }
 
-    public String getContent() { return content; }
-    public void setContent(String content) { this.content = content; }
+  submitPin(): void {
+    if (this.enteredPin.length === 4) {
+      this.stompClient.publish({
+        destination: '/app/pos/pin',
+        body: JSON.stringify({ pin: this.enteredPin })
+      });
+      alert(`PIN 已提交: ${this.enteredPin}`);
+      this.clearPin();
+    } else {
+      alert('请输入完整的 4 位 PIN');
+    }
+  }
 
-    public String getField() { return field; }
-    public void setField(String field) { this.field = field; }
+  get maskedPin(): string {
+    return this.enteredPin.replace(/./g, '*').padEnd(4, '_');
+  }
 }
-🔹 4. QuestionService 只返回一个问题
-QuestionService.java
+3️⃣ Implement pos.component.html (UI)
+Replace the generated pos.component.html with:
 
-java
+html
 Copy
 Edit
-package com.example.pos.service;
+<div class="pos-container">
+  <h2>POS 机 - PIN Pad</h2>
+  <p>{{ status }}</p>
+  <div id="display">{{ maskedPin }}</div>
 
-import com.example.pos.model.Question;
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import org.springframework.stereotype.Service;
+  <!-- PIN Pad Buttons -->
+  <div class="button-container">
+    <button *ngFor="let digit of ['1','2','3','4','5','6','7','8','9','*','0','#']"
+            (click)="enterDigit(digit)">
+      {{ digit }}
+    </button>
+  </div>
 
-import javax.annotation.PostConstruct;
-import java.io.InputStream;
-import java.util.List;
-import java.util.Optional;
-import java.util.concurrent.atomic.AtomicInteger;
+  <button (click)="clearPin()">清除</button>
+  <button (click)="submitPin()">提交</button>
+</div>
+4️⃣ Implement pos.component.css (Styling)
+Replace pos.component.css with:
 
-@Service
-public class QuestionService {
-    private List<Question> questions;
-    private AtomicInteger currentIndex = new AtomicInteger(0);
-
-    @PostConstruct
-    public void loadQuestions() {
-        ObjectMapper objectMapper = new ObjectMapper();
-        try (InputStream inputStream = getClass().getResourceAsStream("/questions.json")) {
-            questions = objectMapper.readValue(inputStream, new TypeReference<List<Question>>() {});
-        } catch (Exception e) {
-            throw new RuntimeException("无法加载问题数据", e);
-        }
-    }
-
-    public Optional<Question> getNextQuestion() {
-        int index = currentIndex.getAndIncrement();
-        if (index < questions.size()) {
-            return Optional.of(questions.get(index));
-        } else {
-            return Optional.empty(); // 没有更多问题
-        }
-    }
-
-    public void resetQuestions() {
-        currentIndex.set(0); // 重新开始问题
-    }
-}
-🔹 5. QuestionController 提供问题
-QuestionController.java
-
-java
+css
 Copy
 Edit
-package com.example.pos.controller;
+.pos-container { text-align: center; font-family: Arial, sans-serif; }
+#display { font-size: 24px; margin: 20px; padding: 10px; border: 2px solid black; width: 200px; text-align: center; }
+.button-container { display: grid; grid-template-columns: repeat(3, 60px); gap: 10px; justify-content: center; }
+button { width: 60px; height: 60px; font-size: 20px; cursor: pointer; }
+5️⃣ Use in app.component.html
+After implementing the component, include it in app.component.html:
 
-import com.example.pos.model.Question;
-import com.example.pos.service.QuestionService;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.messaging.simp.SimpMessagingTemplate;
-import org.springframework.web.bind.annotation.*;
-
-import java.util.Optional;
-
-@RestController
-@RequestMapping("/api/question")
-public class QuestionController {
-
-    @Autowired
-    private QuestionService questionService;
-
-    @Autowired
-    private SimpMessagingTemplate messagingTemplate;
-
-    @GetMapping("/next")
-    public Question getNextQuestion() {
-        Optional<Question> question = questionService.getNextQuestion();
-        return question.orElse(new Question(0, "所有问题已完成", ""));
-    }
-
-    @PostMapping("/reset")
-    public void resetQuestions() {
-        questionService.resetQuestions();
-    }
-}
-🔹 6. AnswerController 处理 POS 机回答
-AnswerController.java
-
-java
+html
 Copy
 Edit
-package com.example.pos.controller;
-
-import com.example.pos.service.QuestionService;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.messaging.simp.SimpMessagingTemplate;
-import org.springframework.web.bind.annotation.*;
-
-@RestController
-@RequestMapping("/api/answer")
-public class AnswerController {
-
-    @Autowired
-    private SimpMessagingTemplate messagingTemplate;
-
-    @Autowired
-    private QuestionService questionService;
-
-    @PostMapping
-    public void receiveAnswer(@RequestParam String answer, @RequestParam String field) {
-        if ("No".equalsIgnoreCase(answer)) {
-            // 发送错误信息给营业员
-            messagingTemplate.convertAndSend("/topic/error", "用户拒绝: " + field);
-        } else {
-            // 发送下一个问题
-            messagingTemplate.convertAndSend("/topic/question", questionService.getNextQuestion().orElse(null));
-        }
-    }
-}
-🔹 7. 运行项目
-bash
-Copy
-Edit
-mvn spring-boot:run
-后端启动后：
-
-/api/question/next：获取当前问题
-/api/answer?answer=Yes&field=name：POS 机回答 "Yes" 继续
-/api/answer?answer=No&field=address：POS 机回答 "No" 让营业员修改
-🔹 8. POS 机如何请求问题？
-POS 机代码（pos.html）：
-
-javascript
-Copy
-Edit
-function fetchNextQuestion() {
-    fetch("http://localhost:8080/api/question/next")
-        .then(response => response.json())
-        .then(data => {
-            document.getElementById('question').innerText = data.content;
-            document.getElementById('yesBtn').setAttribute("onclick", `sendAnswer('Yes', '${data.field}')`);
-            document.getElementById('noBtn').setAttribute("onclick", `sendAnswer('No', '${data.field}')`);
-        });
-}
-
-function sendAnswer(answer, field) {
-    fetch(`http://localhost:8080/api/answer?answer=${answer}&field=${field}`, { method: "POST" })
-        .then(() => fetchNextQuestion());
-}
-
-// 加载第一个问题
-fetchNextQuestion();
-📌 结果
-营业员填写信息
-POS 机显示第一个问题
-POS 机用户回答 "Yes"
-返回下一个问题
-POS 机用户回答 "No"
-WebSocket 通知营业员修改
-所有问题完成，POS 机显示 "所有问题已完成"
-📌 总结
-✅ 每次调用 API 只返回一个问题
-✅ POS 机回答 "Yes" 进入下一个问题
-✅ POS 机回答 "No" 让营业员修改
-✅ 后端用 JSON 模拟数据库
-✅ POS 机 WebSocket 实时交互
-
-你可以直接运行代码，看看是否符合你的需求！ 🚀
+<app-pos></app-pos>
+🚀 Key Features in Angular Version
+✅ WebSocket support with Stomp.js (Replaces raw SockJS calls).
+✅ Component-based architecture (Reusable).
+✅ Angular event binding ((click)="...").
+✅ Dynamic button generation (*ngFor).
+✅ Two-way data binding with TypeScript logic.
