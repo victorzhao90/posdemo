@@ -1,112 +1,44 @@
-2️⃣ Implement pos.component.ts (Logic)
-Modify the generated pos.component.ts to handle WebSocket communication and PIN input:
+import { TestBed } from '@angular/core/testing';
+import { Router } from '@angular/router';
+import { Location } from '@angular/common';
+import { BrowserBackGuard } from './back.guard';
+import { NavigatorService } from 'td-ea-ts-ui-shared';
+import { RESTRICTED_BACK_PAGE_ROUTES } from '../app.const';
 
-typescript
-Copy
-Edit
-import { Component, OnInit } from '@angular/core';
-import { Client } from '@stomp/stompjs';
-import * as SockJS from 'sockjs-client';
+describe('BrowserBackGuard', () => {
+  let guard: BrowserBackGuard;
+  let routerSpy: jasmine.SpyObj<Router>;
+  let locationSpy: jasmine.SpyObj<Location>;
+  let navServiceSpy: jasmine.SpyObj<NavigatorService>;
 
-@Component({
-  selector: 'app-pos',
-  templateUrl: './pos.component.html',
-  styleUrls: ['./pos.component.css']
-})
-export class PosComponent implements OnInit {
-  private stompClient!: Client;
-  status: string = '连接中...';
-  enteredPin: string = '';
+  beforeEach(() => {
+    routerSpy = jasmine.createSpyObj('Router', ['navigate']);
+    locationSpy = jasmine.createSpyObj('Location', ['path']);
+    navServiceSpy = jasmine.createSpyObj('NavigatorService', ['']);
 
-  ngOnInit(): void {
-    this.connectWebSocket();
-  }
-
-  connectWebSocket(): void {
-    const socket = new SockJS('http://localhost:8080/ws');
-    this.stompClient = new Client({
-      webSocketFactory: () => socket,
-      debug: (str) => console.log(str),
-      reconnectDelay: 5000
+    TestBed.configureTestingModule({
+      providers: [
+        BrowserBackGuard,
+        { provide: Router, useValue: routerSpy },
+        { provide: Location, useValue: locationSpy },
+        { provide: NavigatorService, useValue: navServiceSpy }
+      ]
     });
 
-    this.stompClient.onConnect = () => {
-      this.status = '✅ 已连接';
-      console.log('Connected to WebSocket');
-    };
+    guard = TestBed.inject(BrowserBackGuard);
+  });
 
-    this.stompClient.activate();
-  }
+  it('should be created', () => {
+    expect(guard).toBeTruthy();
+  });
 
-  enterDigit(digit: string): void {
-    if (this.enteredPin.length < 4) {
-      this.enteredPin += digit;
-    }
-  }
+  it('should allow navigation if route is not restricted', () => {
+    routerSpy.url = '/home'; // 模拟当前 URL
+    expect(guard.canDeactivate({ url: '/home' } as any)).toBeTrue();
+  });
 
-  clearPin(): void {
-    this.enteredPin = '';
-  }
-
-  submitPin(): void {
-    if (this.enteredPin.length === 4) {
-      this.stompClient.publish({
-        destination: '/app/pos/pin',
-        body: JSON.stringify({ pin: this.enteredPin })
-      });
-      alert(`PIN 已提交: ${this.enteredPin}`);
-      this.clearPin();
-    } else {
-      alert('请输入完整的 4 位 PIN');
-    }
-  }
-
-  get maskedPin(): string {
-    return this.enteredPin.replace(/./g, '*').padEnd(4, '_');
-  }
-}
-3️⃣ Implement pos.component.html (UI)
-Replace the generated pos.component.html with:
-
-html
-Copy
-Edit
-<div class="pos-container">
-  <h2>POS 机 - PIN Pad</h2>
-  <p>{{ status }}</p>
-  <div id="display">{{ maskedPin }}</div>
-
-  <!-- PIN Pad Buttons -->
-  <div class="button-container">
-    <button *ngFor="let digit of ['1','2','3','4','5','6','7','8','9','*','0','#']"
-            (click)="enterDigit(digit)">
-      {{ digit }}
-    </button>
-  </div>
-
-  <button (click)="clearPin()">清除</button>
-  <button (click)="submitPin()">提交</button>
-</div>
-4️⃣ Implement pos.component.css (Styling)
-Replace pos.component.css with:
-
-css
-Copy
-Edit
-.pos-container { text-align: center; font-family: Arial, sans-serif; }
-#display { font-size: 24px; margin: 20px; padding: 10px; border: 2px solid black; width: 200px; text-align: center; }
-.button-container { display: grid; grid-template-columns: repeat(3, 60px); gap: 10px; justify-content: center; }
-button { width: 60px; height: 60px; font-size: 20px; cursor: pointer; }
-5️⃣ Use in app.component.html
-After implementing the component, include it in app.component.html:
-
-html
-Copy
-Edit
-<app-pos></app-pos>
-🚀 Key Features in Angular Version
-✅ WebSocket support with Stomp.js (Replaces raw SockJS calls).
-✅ Component-based architecture (Reusable).
-✅ Angular event binding ((click)="...").
-✅ Dynamic button generation (*ngFor).
-✅ Two-way data binding with TypeScript logic.
+  it('should block navigation if route is restricted', () => {
+    routerSpy.url = RESTRICTED_BACK_PAGE_ROUTES[0]; // 选一个受限路由
+    expect(guard.canDeactivate({ url: RESTRICTED_BACK_PAGE_ROUTES[0] } as any)).toBeFalse();
+  });
+});
